@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from sqlalchemy import func
 
+
 import csv
 import os
 import io
@@ -10,8 +11,16 @@ import io
 # ---------- Basic setup ----------
 app = Flask(__name__)
 
-# allow React (running on localhost:5173) to call this API
-CORS(app, origins=["http://127.0.0.1:5173", "http://localhost:5173"])
+CORS(
+    app,
+    resources={r"/*": {"origins": [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "https://ai-finance-fo9r8o8a6-vinitas-projects.vercel.app",
+    ]}}
+)
+
+
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
