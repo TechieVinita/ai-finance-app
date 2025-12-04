@@ -36,10 +36,20 @@ def handle_options():
 
 from flask_cors import CORS
 
+
 CORS(
     app,
-    resources={r"/*": {"origins": "*"}},   # allow all origins
-    supports_credentials=False             # you are using simple Bearer token, not cookies
+    resources={
+        r"/*": {
+            "origins": [
+                "http://127.0.0.1:5173",
+                "http://localhost:5173",
+                "https://ai-finance-app-vinitas-projects.vercel.app",
+                "https://ai-finance-app-beta.vercel.app",
+            ]
+        }
+    },
+    supports_credentials=False,  # IMPORTANT: we're using Bearer tokens, not cookies
 )
 
 
