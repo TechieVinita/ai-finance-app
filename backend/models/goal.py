@@ -1,4 +1,6 @@
+# backend/models/goal.py
 from db import db
+
 
 class Goal(db.Model):
     __tablename__ = "goals"
@@ -7,10 +9,10 @@ class Goal(db.Model):
     category = db.Column(db.String(50), nullable=False)
     monthly_limit = db.Column(db.Float, nullable=False)
 
-    # NEW: link to user
+    # link to user
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "category": self.category,
