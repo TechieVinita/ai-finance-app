@@ -1,0 +1,12 @@
+Flask
+Flask-Cors
+Flask-SQLAlchemy
+pandas
+python-dotenv
+
+# from backend folder
+python -m venv testvenv
+testvenv\Scripts\activate
+
+pip install -r requirements.txt
+python app.py

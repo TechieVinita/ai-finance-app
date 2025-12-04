@@ -1,0 +1,7 @@
+# root .gitignore
+backend/venv/
+backend/testvenv/
+frontend/node_modules/
+__pycache__/
+.env
+dist/
