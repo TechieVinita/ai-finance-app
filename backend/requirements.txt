@@ -4,4 +4,7 @@ Flask-SQLAlchemy
 pandas
 python-dotenv
 gunicorn
+PyJWT
+Werkzeug
+
 

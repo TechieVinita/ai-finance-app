@@ -1,119 +1,170 @@
 from flask import Flask, jsonify, request
-from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from sqlalchemy import func
-
+from dotenv import load_dotenv
 
 import csv
 import os
 import io
+import datetime
+import jwt
 
-# ---------- Basic setup ----------
+from db import db
+from models import User, Transaction, Goal
+
+# -------------------------------------------------
+# Basic setup
+# -------------------------------------------------
+
+load_dotenv()
+
 app = Flask(__name__)
 
-CORS(
-    app,
-    resources={r"/*": {"origins": [
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "https://ai-finance-fo9r8o8a6-vinitas-projects.vercel.app",
-    ]}}
-)
-
-
-
+# For prototype, allow all origins. You can restrict later.
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "data", "sample_transactions.csv")
 
-# SQLite database file: backend/finance.db
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(BASE_DIR, "finance.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-db = SQLAlchemy(app)
+db.init_app(app)
+
+with app.app_context():
+    db.create_all()
+
+JWT_SECRET = os.environ.get("JWT_SECRET", "dev_secret_change_me")
+JWT_ALGORITHM = "HS256"
+TOKEN_EXP_HOURS = 12
 
 
-# ---------- Database model ----------
-class Transaction(db.Model):
-    __tablename__ = "transactions"
+# -------------------------------------------------
+# Auth helper
+# -------------------------------------------------
 
-    id = db.Column(db.Integer, primary_key=True)
-    date = db.Column(db.String(20), nullable=False)
-    description = db.Column(db.String(255), nullable=False)
-    amount = db.Column(db.Float, nullable=False)
-    category = db.Column(db.String(50), nullable=False)
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "date": self.date,
-            "description": self.description,
-            "amount": self.amount,
-            "category": self.category,
-        }
+def generate_token(user_id: int) -> str:
+    payload = {
+        "user_id": user_id,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=TOKEN_EXP_HOURS),
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    return token
 
 
-class Goal(db.Model):
-    __tablename__ = "goals"
+def require_auth(f):
+    from functools import wraps
 
-    id = db.Column(db.Integer, primary_key=True)
-    # e.g. "Food & Dining", "Transport"
-    category = db.Column(db.String(50), nullable=False, unique=True)
-    # monthly limit in absolute Rupees
-    monthly_limit = db.Column(db.Float, nullable=False)
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Missing or invalid Authorization header"}), 401
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "category": self.category,
-            "monthly_limit": self.monthly_limit,
-        }
+        token = auth_header.split(" ", 1)[1]
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "Token expired"}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"error": "Invalid token"}), 401
 
+        request.user_id = payload["user_id"]
+        return f(*args, **kwargs)
 
-
-# ---------- Simple rule-based categorization ----------
-def categorize_transaction(description: str, amount: float) -> str:
-    text = (description or "").lower()
-
-    # Income
-    if "salary" in text or "credit" in text:
-        return "Income"
-
-    # Food & Dining
-    if "zomato" in text or "swiggy" in text or "restaurant" in text:
-        return "Food & Dining"
-
-    # Transport
-    if "uber" in text or "ola" in text or "cab" in text:
-        return "Transport"
-
-    # Shopping
-    if "amazon" in text or "flipkart" in text or "myntra" in text:
-        return "Shopping"
-
-    # Rent / Housing
-    if "rent" in text or "maintenance" in text:
-        return "Housing"
-
-    # Utilities
-    if "electricity" in text or "water bill" in text or "internet" in text:
-        return "Utilities"
-
-    # If amount is positive and no keyword matched, assume Income
-    if amount > 0:
-        return "Income"
-
-    # Default
-    return "Other"
+    return wrapper
 
 
-# ---------- Health check ----------
+# -------------------------------------------------
+# Health check
+# -------------------------------------------------
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
 
 
-# ---------- Helper: load from local CSV file (for testing) ----------
+# -------------------------------------------------
+# Auth routes
+# -------------------------------------------------
+
+@app.route("/api/auth/signup", methods=["POST"])
+def signup():
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    existing = User.query.filter_by(email=email).first()
+    if existing:
+        return jsonify({"error": "User with this email already exists"}), 400
+
+    user = User(email=email)
+    user.set_password(password)
+
+    db.session.add(user)
+    db.session.commit()
+
+    token = generate_token(user.id)
+    return jsonify({"message": "Signup successful", "token": token}), 201
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def login():
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if not user or not user.check_password(password):
+        return jsonify({"error": "Invalid email or password"}), 401
+
+    token = generate_token(user.id)
+    return jsonify({"message": "Login successful", "token": token}), 200
+
+
+# -------------------------------------------------
+# Rule-based categorization
+# -------------------------------------------------
+
+def categorize_transaction(description: str, amount: float) -> str:
+    text = (description or "").lower()
+
+    if "salary" in text or "credit" in text:
+        return "Income"
+
+    if "zomato" in text or "swiggy" in text or "restaurant" in text:
+        return "Food & Dining"
+
+    if "uber" in text or "ola" in text or "cab" in text:
+        return "Transport"
+
+    if "amazon" in text or "flipkart" in text or "myntra" in text:
+        return "Shopping"
+
+    if "rent" in text or "maintenance" in text:
+        return "Housing"
+
+    if "electricity" in text or "water bill" in text or "internet" in text:
+        return "Utilities"
+
+    if amount > 0:
+        return "Income"
+
+    return "Other"
+
+
+# -------------------------------------------------
+# CSV helpers (testing only)
+# -------------------------------------------------
+
 def load_transactions_from_csv():
     transactions = []
 
@@ -138,19 +189,17 @@ def load_transactions_from_csv():
 
 @app.route("/csv-transactions", methods=["GET"])
 def get_csv_transactions():
+    # not tied to any user; just for demo
     transactions = load_transactions_from_csv()
     return jsonify({"transactions": transactions})
 
 
-# ---------- HTML form to upload CSV (for testing) ----------
 @app.route("/upload", methods=["GET"])
 def upload_form():
     return """
     <!DOCTYPE html>
     <html>
-      <head>
-        <title>Upload CSV</title>
-      </head>
+      <head><title>Upload CSV</title></head>
       <body>
         <h1>Upload bank statement CSV</h1>
         <form action="/upload-csv" method="post" enctype="multipart/form-data">
@@ -162,9 +211,15 @@ def upload_form():
     """
 
 
-# ---------- Handle uploaded CSV: parse + SAVE TO DB ----------
+# -------------------------------------------------
+# CSV upload → save to DB for THIS user
+# -------------------------------------------------
+
 @app.route("/upload-csv", methods=["POST"])
+@require_auth
 def upload_csv():
+    user_id = request.user_id
+
     if "file" not in request.files:
         return jsonify({"error": "No file part in the request"}), 400
 
@@ -173,24 +228,30 @@ def upload_csv():
     if file.filename == "":
         return jsonify({"error": "No file selected"}), 400
 
-    # Read CSV content
-    text_stream = io.StringIO(file.stream.read().decode("utf-8"))
-    reader = csv.DictReader(text_stream)
+    try:
+        text_stream = io.StringIO(file.stream.read().decode("utf-8"))
+    except UnicodeDecodeError:
+        return jsonify({"error": "Could not decode file as UTF-8"}), 400
 
+    reader = csv.DictReader(text_stream)
     saved_transactions = []
 
     for row in reader:
-        date = row.get("date", "")
-        description = row.get("description", "")
-        amount = float(row.get("amount", 0) or 0)
+        date = row.get("date", "") or ""
+        description = row.get("description", "") or ""
+        try:
+            amount = float(row.get("amount", 0) or 0)
+        except ValueError:
+            continue
+
         category = categorize_transaction(description, amount)
 
-        # Create a Transaction object (row in DB)
         tx = Transaction(
             date=date,
             description=description,
             amount=amount,
             category=category,
+            user_id=user_id,
         )
 
         db.session.add(tx)
@@ -201,7 +262,7 @@ def upload_csv():
             "category": category,
         })
 
-    db.session.commit()  # actually write to finance.db
+    db.session.commit()
 
     return jsonify({
         "saved": True,
@@ -210,24 +271,17 @@ def upload_csv():
     })
 
 
-# ---------- New API: get all transactions FROM DB ----------
-@app.route("/api/transactions", methods=["GET"])
-def get_transactions_from_db():
-    transactions = Transaction.query.order_by(Transaction.date).all()
-    data = [t.to_dict() for t in transactions]
-    return jsonify({"transactions": data})
+# -------------------------------------------------
+# Helpers for summaries and forecast (per user)
+# -------------------------------------------------
 
-
-def get_category_totals_dict():
-    """
-    Returns a dict: {category: total_amount}
-    Negative = net expense, positive = net income.
-    """
+def get_category_totals_dict(user_id: int):
     rows = (
         db.session.query(
             Transaction.category,
             func.sum(Transaction.amount).label("total_amount")
         )
+        .filter(Transaction.user_id == user_id)
         .group_by(Transaction.category)
         .all()
     )
@@ -238,37 +292,13 @@ def get_category_totals_dict():
     return totals
 
 
-
-@app.route("/api/summary/categories", methods=["GET"])
-def get_category_summary():
-    totals = get_category_totals_dict()
-
-    summary = []
-    for idx, (category, total) in enumerate(totals.items(), start=1):
-        summary.append({
-            "id": idx,
-            "category": category,
-            "total": total,
-        })
-
-    return jsonify({"summary": summary})
-
-
-
-@app.route("/api/forecast", methods=["GET"])
-def get_forecast():
-    """
-    Very simple forecast:
-    - For each expense category, use current spending and assume 5% increase next month.
-    - Also compute total income, total expense, and savings now vs forecast.
-    """
-
-    # Sum amounts per category
+def compute_forecast(user_id: int):
     rows = (
         db.session.query(
             Transaction.category,
             func.sum(Transaction.amount).label("total_amount")
         )
+        .filter(Transaction.user_id == user_id)
         .group_by(Transaction.category)
         .all()
     )
@@ -281,12 +311,10 @@ def get_forecast():
         total = float(row.total_amount)
 
         if total >= 0:
-            # treat positive totals as income categories
             income_total += total
         else:
-            # negative -> expenses
             current_spend = abs(total)
-            forecast_spend = current_spend * 1.05  # assume 5% growth
+            forecast_spend = current_spend * 1.05
             expense_total += current_spend
 
             category_forecast.append({
@@ -299,7 +327,7 @@ def get_forecast():
     current_saving = income_total - expense_total
     forecast_saving = income_total - forecast_expense_total
 
-    result = {
+    return {
         "categories": category_forecast,
         "totals": {
             "income": income_total,
@@ -310,19 +338,59 @@ def get_forecast():
         },
     }
 
-    return jsonify(result)
 
+# -------------------------------------------------
+# API: transactions, summary, forecast (per user)
+# -------------------------------------------------
+
+@app.route("/api/transactions", methods=["GET"])
+@require_auth
+def get_transactions_from_db():
+    user_id = request.user_id
+    transactions = (
+        Transaction.query
+        .filter_by(user_id=user_id)
+        .order_by(Transaction.date)
+        .all()
+    )
+    data = [t.to_dict() for t in transactions]
+    return jsonify({"transactions": data})
+
+
+@app.route("/api/summary/categories", methods=["GET"])
+@require_auth
+def get_category_summary():
+    user_id = request.user_id
+    totals = get_category_totals_dict(user_id)
+
+    summary = []
+    for idx, (category, total) in enumerate(totals.items(), start=1):
+        summary.append({
+            "id": idx,
+            "category": category,
+            "total": total,
+        })
+
+    return jsonify({"summary": summary})
+
+
+@app.route("/api/forecast", methods=["GET"])
+@require_auth
+def get_forecast():
+    user_id = request.user_id
+    forecast = compute_forecast(user_id)
+    return jsonify(forecast)
+
+
+# -------------------------------------------------
+# API: chatbot (per user)
+# -------------------------------------------------
 
 @app.route("/api/chat", methods=["POST"])
+@require_auth
 def chat():
-    """
-    Very simple rule-based chatbot.
-    It understands a few types of questions using existing data:
-      - "how much did i spend on <category>?"
-      - "total income"
-      - "total expense"
-      - "current saving" / "forecast saving"
-    """
+    user_id = request.user_id
+
     data = request.get_json() or {}
     question = (data.get("question") or "").strip()
     if not question:
@@ -330,15 +398,10 @@ def chat():
 
     q = question.lower()
 
-    # Get summary data from helpers
-    category_totals = get_category_totals_dict()
+    category_totals = get_category_totals_dict(user_id)
+    forecast_data = compute_forecast(user_id)
 
-    # Reuse forecast totals
-    forecast_data = get_forecast().json  # call the function directly
-
-    # 1) "How much did I spend on Food & Dining?"
     if "spend on" in q or "spent on" in q:
-        # try to match category names roughly
         best_category = None
         for category in category_totals.keys():
             if category.lower() in q:
@@ -351,13 +414,11 @@ def chat():
             })
 
         total = category_totals[best_category]
-        # spending = negative totals
         spent = abs(total) if total < 0 else 0
         return jsonify({
             "answer": f"You spent ₹{spent:.2f} on {best_category} in the current data."
         })
 
-    # 2) Total income
     if "total income" in q or "how much did i earn" in q:
         income = 0.0
         for total in category_totals.values():
@@ -367,7 +428,6 @@ def chat():
             "answer": f"Your total income in the current data is ₹{income:.2f}."
         })
 
-    # 3) Total expense
     if "total expense" in q or "how much did i spend in total" in q:
         expense = 0.0
         for total in category_totals.values():
@@ -377,7 +437,6 @@ def chat():
             "answer": f"Your total expense in the current data is ₹{expense:.2f}."
         })
 
-    # 4) Savings
     if "saving" in q:
         current_saving = forecast_data["totals"]["current_saving"]
         forecast_saving = forecast_data["totals"]["forecast_saving"]
@@ -388,22 +447,28 @@ def chat():
             )
         })
 
-    # Default fallback
     return jsonify({
         "answer": "I can answer things like: 'How much did I spend on Food & Dining?', "
                   "'What is my total income?', 'What is my total expense?', or 'What are my savings?'."
     })
 
 
+# -------------------------------------------------
+# API: goals (per user)
+# -------------------------------------------------
 
 @app.route("/api/goals", methods=["GET"])
+@require_auth
 def get_goals():
-    goals = Goal.query.order_by(Goal.category).all()
+    user_id = request.user_id
+    goals = Goal.query.filter_by(user_id=user_id).order_by(Goal.category).all()
     return jsonify({"goals": [g.to_dict() for g in goals]})
 
 
 @app.route("/api/goals", methods=["POST"])
+@require_auth
 def create_or_update_goal():
+    user_id = request.user_id
     data = request.get_json() or {}
 
     category = (data.get("category") or "").strip()
@@ -420,33 +485,35 @@ def create_or_update_goal():
     if monthly_limit <= 0:
         return jsonify({"error": "monthly_limit must be > 0"}), 400
 
-    # If a goal for this category already exists, update it
-    goal = Goal.query.filter_by(category=category).first()
+    goal = Goal.query.filter_by(user_id=user_id, category=category).first()
     if goal:
         goal.monthly_limit = monthly_limit
     else:
-        goal = Goal(category=category, monthly_limit=monthly_limit)
+        goal = Goal(category=category, monthly_limit=monthly_limit, user_id=user_id)
         db.session.add(goal)
 
     db.session.commit()
 
     return jsonify({"goal": goal.to_dict()}), 201
 
+
+# -------------------------------------------------
+# API: reset transactions (per user)
+# -------------------------------------------------
+
 @app.route("/api/reset", methods=["POST"])
+@require_auth
 def reset_transactions():
-    """
-    Delete all transactions from the database.
-    Goals stay as they are.
-    """
-    deleted = db.session.query(Transaction).delete()
+    user_id = request.user_id
+    deleted = db.session.query(Transaction).filter_by(user_id=user_id).delete()
     db.session.commit()
     return jsonify({"success": True, "deleted": deleted})
 
 
-# ---------- Main entry ----------
+# -------------------------------------------------
+# Main entry
+# -------------------------------------------------
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
-
-
-# For the report: mention that debug=False would be used in deployment.
