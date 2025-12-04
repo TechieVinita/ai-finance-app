@@ -34,18 +34,14 @@ def handle_options():
         return response
 
 
+from flask_cors import CORS
+
 CORS(
     app,
-    origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://ai-finance-app-vinitas-projects.vercel.app/",
-    ],
-    supports_credentials=True,
-    allow_headers=["Content-Type", "Authorization"],
-    expose_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    resources={r"/*": {"origins": "*"}},   # allow all origins
+    supports_credentials=False             # you are using simple Bearer token, not cookies
 )
+
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
