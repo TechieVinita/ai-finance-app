@@ -5,10 +5,3 @@ pandas
 python-dotenv
 gunicorn
 
-
-# from backend folder
-python -m venv testvenv
-testvenv\Scripts\activate
-
-pip install -r requirements.txt
-python app.py
