@@ -436,6 +436,8 @@ def reset_transactions():
 
 # ---------- Main entry ----------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)  # for local dev; okay
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
+
 
 # For the report: mention that debug=False would be used in deployment.

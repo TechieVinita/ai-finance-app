@@ -1,7 +1,18 @@
-# root .gitignore
+# Python
 backend/venv/
 backend/testvenv/
-frontend/node_modules/
 __pycache__/
+*.pyc
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Environment
 .env
-dist/
+*.sqlite
+*.db
+
+# OS
+.DS_Store
+Thumbs.db

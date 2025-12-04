@@ -3,6 +3,8 @@ Flask-Cors
 Flask-SQLAlchemy
 pandas
 python-dotenv
+gunicorn
+
 
 # from backend folder
 python -m venv testvenv
