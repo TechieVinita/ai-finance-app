@@ -39,7 +39,7 @@ CORS(
     origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "https://ai-finance-fo9r8o8a6-vinitas-projects.vercel.app",
+        "https://ai-finance-app-vinitas-projects.vercel.app/",
     ],
     supports_credentials=True,
     allow_headers=["Content-Type", "Authorization"],
